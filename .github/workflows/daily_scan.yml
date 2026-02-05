@@ -2,8 +2,11 @@ name: Daily Bossa Scan
 
 on:
   schedule:
-    # Uruchamiaj o 17:00 UTC (18:00 w Polsce) w dni robocze
+    # 0 minut, 17 godzina (UTC) = 18:00 w Polsce
+    # Uruchamiaj TYLKO o pełnej godzinie
     - cron: '0 17 * * 1-5'
+  
+  # Pozwala na ręczne uruchomienie przyciskiem
   workflow_dispatch:
 
 jobs:
