@@ -1,0 +1,2 @@
+# mozg
+decyzyjnosc i informacje
