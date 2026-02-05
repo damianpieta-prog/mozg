@@ -9,6 +9,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
+import requests
 
 # ==========================================
 # KONFIGURACJA STRONY
@@ -29,7 +30,7 @@ def load_tickers():
         clean = []
         for t in tickers:
             t = t.strip()
-            # Mapowanie
+            # Mapowanie nazw na Yahoo Finance
             if t == "DAX": t = "^GDAXI"
             if t == "WIG20": t = "WIG20.WA"
             if t == "GOLD": t = "GLD"
@@ -41,9 +42,15 @@ def load_tickers():
 @st.cache_data(ttl=900)
 def get_bulk_data(tickers_list, period="2y"):
     if not tickers_list: return None
+    
+    # --- SZTUCZKA ANTY-BLOKADA ---
+    # Udajemy przeglądarkę Chrome, żeby Yahoo nas nie blokowało
+    session = requests.Session()
+    session.headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+    
     try:
-        # Pobieranie grupowe (szybkie)
-        return yf.download(tickers_list, period=period, group_by='ticker', progress=False, threads=True)
+        # Pobieranie grupowe
+        return yf.download(tickers_list, period=period, group_by='ticker', progress=False, threads=True, session=session)
     except: return None
 
 def extract_ticker_data(bulk, ticker):
@@ -87,14 +94,14 @@ def send_email_alert(signals_list):
         s.send_message(msg)
         s.quit()
         st.success("📧 Mail wysłany pomyślnie!")
-    except Exception as e: st.error(f"Błąd: {e}")
+    except Exception as e: st.error(f"Błąd wysyłki: {e}")
 
 # ==========================================
 # 🎛️ MENU
 # ==========================================
 st.sidebar.title("🎛️ NAWIGACJA")
 app_mode = st.sidebar.selectbox("Wybierz moduł:", 
-    ["🔍 SZYBKI AUDYT (One-Pager)", "🚀 SKANER (True Cross)", "📊 BACKTESTER"]
+    ["🔍 SZYBKI AUDYT (One-Pager)", "🚀 SKANER (True Cross)", "📊 BACKTESTER", "🛡️ SAFE INVESTOR"]
 )
 
 # ==========================================
@@ -106,8 +113,12 @@ if app_mode == "🔍 SZYBKI AUDYT (One-Pager)":
     sel = st.selectbox("Wybierz spółkę:", tickers)
     
     if st.button("Analizuj"):
+        # Tu też używamy sesji, żeby nie blokowało przy pojedynczym klikaniu
+        session = requests.Session()
+        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        
         with st.spinner("Pobieram dane..."):
-            df = yf.download(sel, period="2y", progress=False)
+            df = yf.download(sel, period="2y", progress=False, session=session)
             if df is not None and len(df)>100:
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
                 
@@ -130,7 +141,7 @@ if app_mode == "🔍 SZYBKI AUDYT (One-Pager)":
                 c2.metric("RSI", f"{rsi:.1f}")
                 
                 if trend_ok:
-                    c3.success("✅ TREND WZROSTOWY (Silny)")
+                    c3.success("✅ TREND SILNY (EMA100 > EMA200)")
                 elif cur > e200:
                     c3.warning("⚠️ TREND SŁABY (Średnie nieułożone)")
                 else:
@@ -141,16 +152,20 @@ if app_mode == "🔍 SZYBKI AUDYT (One-Pager)":
                 fig.add_trace(go.Scatter(x=df.index, y=c, name='Cena', line=dict(color='black')))
                 fig.add_trace(go.Scatter(x=df.index, y=e9, name='EMA 9', line=dict(color='blue', width=1)))
                 fig.add_trace(go.Scatter(x=df.index, y=e17, name='EMA 17', line=dict(color='orange', width=1)))
+                
+                # Rysowanie tła trendu
+                fig.add_trace(go.Scatter(x=df.index, y=EMAIndicator(c, 200).ema_indicator(), name='EMA 200', line=dict(color='red', width=2, dash='dot')))
+                
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.error("Brak danych.")
+                st.error("Brak danych lub błąd pobierania.")
 
 # ==========================================
 # MODUŁ 2: SKANER (TRUE CROSS)
 # ==========================================
 elif app_mode == "🚀 SKANER (True Cross)":
     st.title("🚀 SKANER SYGNAŁÓW")
-    st.info("Logika: Cena > EMA200 + EMA100 > EMA200 (Trend) + EMA9 przecina EMA17 (Timing)")
+    st.info("Logika: Trend (EMA100 > EMA200) + Timing (Wczoraj EMA9<=17, Dzisiaj EMA9>17)")
     
     tickers = load_tickers()
     
@@ -184,7 +199,7 @@ elif app_mode == "🚀 SKANER (True Cross)":
                         rsi = RSIIndicator(c, 14).rsi().iloc[-1]
                         
                         # --- WARUNKI ---
-                        # 1. Trend (Ścisły)
+                        # 1. Trend (Ścisły: EMA100 nad EMA200)
                         cond_trend = (cur > e200) and (e100 > e200)
                         
                         # 2. Timing (Przecięcie w górę)
@@ -200,10 +215,10 @@ elif app_mode == "🚀 SKANER (True Cross)":
                             sygnal = "🔥 BUY (NOWY SYGNAŁ)"
                             results.append({"Ticker": t, "Cena": cur, "RSI": rsi, "Sygnał": sygnal})
                         
-                        # Opcjonalnie: Pokaż też silne trzymanie (możesz zakomentować jeśli chcesz tylko nowe)
-                        elif cond_trend and cond_hold and rsi >= 60:
-                            sygnal = "🟢 HOLD (Kontynuacja)"
-                            # results.append({"Ticker": t, "Cena": cur, "RSI": rsi, "Sygnał": sygnal})
+                        # Opcjonalnie: HOLD
+                        # elif cond_trend and cond_hold and rsi >= 60:
+                        #     sygnal = "🟢 HOLD (Kontynuacja)"
+                        #     results.append({"Ticker": t, "Cena": cur, "RSI": rsi, "Sygnał": sygnal})
 
                     except: pass
             
@@ -211,7 +226,7 @@ elif app_mode == "🚀 SKANER (True Cross)":
             status_txt.empty()
             
             if results:
-                st.success(f"Znaleziono {len(results)} okazji!")
+                st.success(f"Znaleziono {len(results)} świeżych okazji!")
                 st.dataframe(pd.DataFrame(results))
                 
                 if st.button("📧 Wyślij Raport na Maila"):
@@ -229,11 +244,14 @@ elif app_mode == "📊 BACKTESTER":
     capital = st.number_input("Kapitał:", 10000)
     
     if st.button("Uruchom Symulację"):
-        df = yf.download(sel, period="5y", progress=False)
+        session = requests.Session()
+        session.headers['User-Agent'] = 'Mozilla/5.0'
+        df = yf.download(sel, period="5y", progress=False, session=session)
+        
         if df is not None and len(df)>200:
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
             
-            c=df['Close']; l=df['Low']
+            c=df['Close']
             e9=EMAIndicator(c,9).ema_indicator()
             e17=EMAIndicator(c,17).ema_indicator()
             e100=EMAIndicator(c,100).ema_indicator()
@@ -245,25 +263,23 @@ elif app_mode == "📊 BACKTESTER":
             
             for i in range(200, len(df)):
                 idx = df.index[i]
-                
-                # Warunki z historii
                 cur_price = c.iloc[i]
+                
+                # Warunki historyczne
                 trend_ok = (cur_price > e100.iloc[i]) and (e100.iloc[i] > e200.iloc[i])
                 cross_up = (e9.iloc[i-1] <= e17.iloc[i-1]) and (e9.iloc[i] > e17.iloc[i])
                 cross_down = (e9.iloc[i-1] >= e17.iloc[i-1]) and (e9.iloc[i] < e17.iloc[i])
                 mom_ok = rsi.iloc[i] >= 60
                 
-                # Logika handlu
+                # Logika
                 if in_pos:
-                    # Wyjście (Cross Down lub SL)
-                    if cross_down: # Exit Signal
+                    if cross_down: # Exit
                         bal = shares * cur_price
                         trades.append({"Data": idx, "Typ": "EXIT", "Cena": cur_price, "Wynik": bal - (shares*entry)})
                         in_pos = False
                 
                 if not in_pos:
-                    # Wejście
-                    if trend_ok and cross_up and mom_ok:
+                    if trend_ok and cross_up and mom_ok: # Buy
                         entry = cur_price
                         shares = bal / entry
                         in_pos = True
@@ -275,6 +291,46 @@ elif app_mode == "📊 BACKTESTER":
             eq_df = pd.DataFrame(equity).set_index("Data")
             st.line_chart(eq_df)
             st.dataframe(pd.DataFrame(trades))
-            
             final_ret = ((eq_df['Kapitał'].iloc[-1] - capital)/capital)*100
             st.metric("Wynik całkowity", f"{final_ret:.2f}%")
+
+# ==========================================
+# MODUŁ 4: SAFE INVESTOR
+# ==========================================
+elif app_mode == "🛡️ SAFE INVESTOR":
+    st.title("🛡️ SAFE INVESTOR (Okazje Długoterminowe)")
+    st.info("Szukam spółek, które są tanie względem swojej 200-tygodniowej średniej.")
+    
+    tickers = load_tickers()
+    if st.button("Skanuj"):
+        # Pobieramy 5 lat, bo potrzebujemy dużo danych do średniej tygodniowej
+        bulk = get_bulk_data(tickers, "5y")
+        res = []
+        
+        if bulk is not None:
+            prog = st.progress(0)
+            for i, t in enumerate(tickers):
+                prog.progress((i+1)/len(tickers))
+                df = extract_ticker_data(bulk, t)
+                if df is not None:
+                    try:
+                        # Konwersja na tygodniowe
+                        df_w = df['Close'].resample('W').mean()
+                        if len(df_w) < 200: continue
+                        
+                        curr = df['Close'].iloc[-1]
+                        wma200 = df_w.rolling(200).mean().iloc[-1]
+                        
+                        dist = ((curr - wma200)/wma200)*100
+                        
+                        # Punktacja: im niżej (ujemny dystans), tym lepiej
+                        score = 100 - dist
+                        
+                        res.append({"Ticker": t, "Cena": curr, "Odchylenie %": dist, "Score": score})
+                    except: pass
+            prog.empty()
+            
+            res.sort(key=lambda x: x['Score'], reverse=True)
+            
+            st.dataframe(pd.DataFrame(res))
+            st.success("Im 'Odchylenie %' jest bardziej ujemne, tym bezpieczniej (bliżej dna).")
