@@ -9,7 +9,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-import requests
 
 # ==========================================
 # KONFIGURACJA STRONY
@@ -42,15 +41,9 @@ def load_tickers():
 @st.cache_data(ttl=900)
 def get_bulk_data(tickers_list, period="2y"):
     if not tickers_list: return None
-    
-    # --- SZTUCZKA ANTY-BLOKADA ---
-    # Udajemy przeglądarkę Chrome, żeby Yahoo nas nie blokowało
-    session = requests.Session()
-    session.headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
-    
     try:
-        # Pobieranie grupowe
-        return yf.download(tickers_list, period=period, group_by='ticker', progress=False, threads=True, session=session)
+        # Pobieranie grupowe - BEZ SESJI (yfinance robi to teraz automatycznie)
+        return yf.download(tickers_list, period=period, group_by='ticker', progress=False, threads=True)
     except: return None
 
 def extract_ticker_data(bulk, ticker):
@@ -113,12 +106,9 @@ if app_mode == "🔍 SZYBKI AUDYT (One-Pager)":
     sel = st.selectbox("Wybierz spółkę:", tickers)
     
     if st.button("Analizuj"):
-        # Tu też używamy sesji, żeby nie blokowało przy pojedynczym klikaniu
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        
         with st.spinner("Pobieram dane..."):
-            df = yf.download(sel, period="2y", progress=False, session=session)
+            # BEZ SESJI
+            df = yf.download(sel, period="2y", progress=False)
             if df is not None and len(df)>100:
                 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
                 
@@ -244,9 +234,8 @@ elif app_mode == "📊 BACKTESTER":
     capital = st.number_input("Kapitał:", 10000)
     
     if st.button("Uruchom Symulację"):
-        session = requests.Session()
-        session.headers['User-Agent'] = 'Mozilla/5.0'
-        df = yf.download(sel, period="5y", progress=False, session=session)
+        # BEZ SESJI
+        df = yf.download(sel, period="5y", progress=False)
         
         if df is not None and len(df)>200:
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
@@ -303,7 +292,7 @@ elif app_mode == "🛡️ SAFE INVESTOR":
     
     tickers = load_tickers()
     if st.button("Skanuj"):
-        # Pobieramy 5 lat, bo potrzebujemy dużo danych do średniej tygodniowej
+        # Pobieramy 5 lat - BEZ SESJI
         bulk = get_bulk_data(tickers, "5y")
         res = []
         
@@ -323,7 +312,6 @@ elif app_mode == "🛡️ SAFE INVESTOR":
                         
                         dist = ((curr - wma200)/wma200)*100
                         
-                        # Punktacja: im niżej (ujemny dystans), tym lepiej
                         score = 100 - dist
                         
                         res.append({"Ticker": t, "Cena": curr, "Odchylenie %": dist, "Score": score})
