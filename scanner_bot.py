@@ -7,7 +7,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
-import requests # <--- WAŻNE: Dodana biblioteka
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1zAE2mUbcVwBfI78f7v3_4K20Z5ffXymyrIcqcyadF4M/export?format=csv&gid=0"
 
@@ -65,13 +64,9 @@ def main():
     tickers = load_tickers()
     if not tickers: return
 
-    # --- SZTUCZKA ANTY-BLOKADA DLA ROBOTA ---
-    session = requests.Session()
-    session.headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
-
     try: 
-        # Przekazujemy sesję tutaj
-        data = yf.download(tickers, period="2y", group_by='ticker', progress=False, threads=True, session=session)
+        # BEZ SESJI - Czysty yfinance
+        data = yf.download(tickers, period="2y", group_by='ticker', progress=False, threads=True)
     except Exception as e: 
         print(f"Błąd pobierania: {e}")
         return
